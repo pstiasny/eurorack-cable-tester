@@ -1,4 +1,6 @@
 /*
+ * Vibe-coded with Claude
+ * 
  * Arduino Micro Pin Connection Tester
  * Tests for shorts and continuity across IDC cable connections
  * 
@@ -26,6 +28,12 @@ const int LED_BLUE = 13;  // For missing connections
 bool shortsDetected = false;
 bool connectionsOk = true;
 
+// Track which pins have problems
+bool pinShorts[8][5] = {false}; // Track shorts between headers
+bool header1InternalShorts[8][8] = {false}; // Track shorts within header1
+bool header2InternalShorts[5][5] = {false}; // Track shorts within header2
+bool pinOpens[5] = {false};     // Track opens in expected connections
+
 // Store detected issues
 String shortsList = "";
 String disconnectsList = "";
@@ -51,7 +59,11 @@ void loop() {
   // Display results if serial is available
   if (Serial) {
     clearSerialTerminal();
-    // Only print final result and any detected issues
+    
+    // Print ASCII art representation first
+    printHeadersAsciiArt();
+    
+    // Then print the text output
     if (shortsDetected) {
       Serial.println(F("TEST RESULT: SHORTS DETECTED\r"));
       Serial.print(shortsList);
@@ -73,7 +85,7 @@ void clearSerialTerminal() {
   Serial.print(F("[H\r"));  // Move cursor to home position
 }
 
-void runTest() {
+void resetTestState() {
   // Clear results
   shortsList = "";
   disconnectsList = "";
@@ -82,9 +94,37 @@ void runTest() {
   shortsDetected = false;
   connectionsOk = true;
   
+  // Reset pin problem tracking
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 5; j++) {
+      pinShorts[i][j] = false;
+    }
+  }
+  
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      header1InternalShorts[i][j] = false;
+    }
+  }
+  
+  for (int i = 0; i < 5; i++) {
+    for (int j = 0; j < 5; j++) {
+      header2InternalShorts[i][j] = false;
+    }
+  }
+  
+  for (int i = 0; i < 5; i++) {
+    pinOpens[i] = false;
+  }
+}
+
+void runTest() {
+  // Reset all test state
+  resetTestState();
+  
   // Test for shorts within each header group
-  testGroupForShorts(header1Pins, header1Size);
-  testGroupForShorts(header2Pins, header2Size);
+  testHeader1ForShorts();
+  testHeader2ForShorts();
   
   // Test for shorts between header groups
   testBetweenGroups();
@@ -96,40 +136,83 @@ void runTest() {
   updateLED();
 }
 
-void testGroupForShorts(const int pins[], int size) {
-  for (int i = 0; i < size; i++) {
+void testHeader1ForShorts() {
+  for (int i = 0; i < header1Size; i++) {
     // Set all pins to INPUT (high impedance)
-    for (int k = 0; k < size; k++) {
-      pinMode(pins[k], INPUT);
+    for (int k = 0; k < header1Size; k++) {
+      pinMode(header1Pins[k], INPUT);
     }
     
     // Set the test pin to OUTPUT LOW
-    pinMode(pins[i], OUTPUT);
-    digitalWrite(pins[i], LOW);
+    pinMode(header1Pins[i], OUTPUT);
+    digitalWrite(header1Pins[i], LOW);
     
     // Test all other pins in this group
-    for (int j = 0; j < size; j++) {
+    for (int j = 0; j < header1Size; j++) {
       if (i != j) {
         // Enable pull-up on the pin we're checking
-        pinMode(pins[j], INPUT_PULLUP);
+        pinMode(header1Pins[j], INPUT_PULLUP);
         delay(10);
         
         // If we read LOW, there's a short to our LOW output pin
-        if (digitalRead(pins[j]) == LOW) {
+        if (digitalRead(header1Pins[j]) == LOW) {
           shortsList += F("SHORT: D");
-          shortsList += pins[i];
+          shortsList += header1Pins[i];
           shortsList += F(" - D");
-          shortsList += pins[j];
+          shortsList += header1Pins[j];
           shortsList += F("\r\n");
           shortsDetected = true;
+          
+          // Track internal shorts in header1
+          header1InternalShorts[i][j] = true;
         }
       }
     }
   }
   
   // Reset all pins to INPUT
-  for (int i = 0; i < size; i++) {
-    pinMode(pins[i], INPUT);
+  for (int i = 0; i < header1Size; i++) {
+    pinMode(header1Pins[i], INPUT);
+  }
+}
+
+void testHeader2ForShorts() {
+  for (int i = 0; i < header2Size; i++) {
+    // Set all pins to INPUT (high impedance)
+    for (int k = 0; k < header2Size; k++) {
+      pinMode(header2Pins[k], INPUT);
+    }
+    
+    // Set the test pin to OUTPUT LOW
+    pinMode(header2Pins[i], OUTPUT);
+    digitalWrite(header2Pins[i], LOW);
+    
+    // Test all other pins in this group
+    for (int j = 0; j < header2Size; j++) {
+      if (i != j) {
+        // Enable pull-up on the pin we're checking
+        pinMode(header2Pins[j], INPUT_PULLUP);
+        delay(10);
+        
+        // If we read LOW, there's a short to our LOW output pin
+        if (digitalRead(header2Pins[j]) == LOW) {
+          shortsList += F("SHORT: D");
+          shortsList += header2Pins[i];
+          shortsList += F(" - D");
+          shortsList += header2Pins[j];
+          shortsList += F("\r\n");
+          shortsDetected = true;
+          
+          // Track internal shorts in header2
+          header2InternalShorts[i][j] = true;
+        }
+      }
+    }
+  }
+  
+  // Reset all pins to INPUT
+  for (int i = 0; i < header2Size; i++) {
+    pinMode(header2Pins[i], INPUT);
   }
 }
 
@@ -149,7 +232,8 @@ void testBetweenGroups() {
     
     for (int j = 0; j < header2Size; j++) {
       // Skip testing expected connections (matching positions)
-      if (i == j) {
+      // But only skip if i is within the connected range
+      if (i < connectedPinCount && i == j) {
         continue; // Skip this iteration - this is an expected connection
       }
       
@@ -163,6 +247,9 @@ void testBetweenGroups() {
         shortsList += header2Pins[j];
         shortsList += F("\r\n");
         shortsDetected = true;
+        
+        // Track cross-header shorts
+        pinShorts[i][j] = true;
       }
       
       pinMode(header2Pins[j], INPUT);
@@ -183,6 +270,9 @@ void testContinuity() {
   
   // Test continuity between corresponding pins
   for (int i = 0; i < connectedPinCount; i++) {
+    bool forwardFailed = false;
+    bool reverseFailed = false;
+    
     // Test in forward direction
     pinMode(header1Pins[i], OUTPUT);
     digitalWrite(header1Pins[i], LOW);
@@ -197,6 +287,7 @@ void testContinuity() {
       disconnectsList += header2Pins[i];
       disconnectsList += F("\r\n");
       connectionsOk = false;
+      forwardFailed = true;
     }
     
     pinMode(header1Pins[i], INPUT);
@@ -216,10 +307,16 @@ void testContinuity() {
       disconnectsList += header1Pins[i];
       disconnectsList += F("\r\n");
       connectionsOk = false;
+      reverseFailed = true;
     }
     
     pinMode(header1Pins[i], INPUT);
     pinMode(header2Pins[i], INPUT);
+    
+    // If either direction failed, mark this pin as open for ASCII art
+    if (forwardFailed || reverseFailed) {
+      pinOpens[i] = true;
+    }
   }
 }
 
@@ -240,4 +337,177 @@ void updateLED() {
     // Green: All tests passed
     digitalWrite(LED_GREEN, LOW);
   }
+}
+
+void printHeadersAsciiArt() {
+  // Top edges
+  Serial.println(F("+--+    +--+"));
+  
+  // Based on the schematic, the connected pins should be displayed in this order:
+  // Header1 (top to bottom): D12, D11, D10, D9, D8
+  // Header2 (top to bottom): D16, D17, D1, D0, D2
+  
+  // For our arrays:
+  // header1Pins[] = {8, 9, 10, 11, 12, 5, 6, 7};  // First 5 are connected
+  // header2Pins[] = {16, 17, 1, 0, 2};            // All 5 are connected
+  
+  // Therefore we need to display them in reverse order
+  
+  // Print each pin row for connectedPinCount
+  for (int i = connectedPinCount - 1; i >= 0; i--) {
+    // Start of line for header 1
+    Serial.print(F("|"));
+    
+    // Check for shorts on this pin (prioritized)
+    bool hasShort1 = false;
+    
+    // First check for cross-header shorts
+    for (int j = 0; j < header2Size; j++) {
+      if (pinShorts[i][j]) {
+        hasShort1 = true;
+        break;
+      }
+    }
+    
+    // Then check for internal shorts within header1
+    if (!hasShort1) {
+      for (int j = 0; j < header1Size; j++) {
+        if (header1InternalShorts[i][j] || header1InternalShorts[j][i]) {
+          hasShort1 = true;
+          break;
+        }
+      }
+    }
+    
+    // Pin state for header 1 - shorts take priority
+    if (hasShort1) {
+      Serial.print(F("!!")); // Short to another pin
+    } else if (pinOpens[i]) {
+      Serial.print(F("XX")); // Open connection
+    } else {
+      Serial.print(F("oo")); // Normal pin
+    }
+    
+    // Connection indicator - only based on open status, not shorts
+    if (pinOpens[i]) {
+      Serial.print(F("|    |"));
+    } else {
+      Serial.print(F("|====|"));
+    }
+    
+    // Check for shorts on this pin (prioritized)
+    bool hasShort2 = false;
+    
+    // First check for cross-header shorts
+    for (int j = 0; j < header1Size; j++) {
+      if (pinShorts[j][i]) {
+        hasShort2 = true;
+        break;
+      }
+    }
+    
+    // Then check for internal shorts within header2
+    if (!hasShort2) {
+      for (int j = 0; j < header2Size; j++) {
+        if (header2InternalShorts[i][j] || header2InternalShorts[j][i]) {
+          hasShort2 = true;
+          break;
+        }
+      }
+    }
+    
+    // Pin state for header 2 - shorts take priority
+    if (hasShort2) {
+      Serial.print(F("!!")); // Short to another pin
+    } else if (pinOpens[i]) {
+      Serial.print(F("XX")); // Open connection
+    } else {
+      Serial.print(F("oo")); // Normal pin
+    }
+    
+    // End of line for header 2
+    Serial.println(F("|"));
+  }
+  
+  // Print unconnected pins in order: D7, D6, D5
+  // In the header1Pins array, these are at indices 7, 6, 5
+  
+  // Print first unconnected pin (D7) with the bottom edge of header 2
+  int i = 7; // D7 index
+  
+  // Start of line for header 1
+  Serial.print(F("|"));
+  
+  // Check for shorts on this pin (prioritized)
+  bool hasShort = false;
+  
+  // First check for cross-header shorts
+  for (int j = 0; j < header2Size; j++) {
+    if (pinShorts[i][j]) {
+      hasShort = true;
+      break;
+    }
+  }
+  
+  // Then check for internal shorts within header1
+  if (!hasShort) {
+    for (int j = 0; j < header1Size; j++) {
+      if (header1InternalShorts[i][j] || header1InternalShorts[j][i]) {
+        hasShort = true;
+        break;
+      }
+    }
+  }
+  
+  // Pin state - show shorts if any exist
+  if (hasShort) {
+    Serial.print(F("!!"));
+  } else {
+    Serial.print(F("oo"));
+  }
+  
+  // End of line for header 1 and bottom of header 2
+  Serial.println(F("|    +--+"));
+  
+  // Print remaining pins (D6, D5) - going from index 6 down to 5
+  for (i = 6; i >= 5; i--) {
+    // Start of line
+    Serial.print(F("|"));
+    
+    // Check for shorts on this pin (prioritized)
+    bool hasShort = false;
+    
+    // First check for cross-header shorts
+    for (int j = 0; j < header2Size; j++) {
+      if (pinShorts[i][j]) {
+        hasShort = true;
+        break;
+      }
+    }
+    
+    // Then check for internal shorts within header1
+    if (!hasShort) {
+      for (int j = 0; j < header1Size; j++) {
+        if (header1InternalShorts[i][j] || header1InternalShorts[j][i]) {
+          hasShort = true;
+          break;
+        }
+      }
+    }
+    
+    // Pin state - show shorts if any exist
+    if (hasShort) {
+      Serial.print(F("!!"));
+    } else {
+      Serial.print(F("oo"));
+    }
+    
+    // End of line
+    Serial.println(F("|"));
+  }
+  
+  // Bottom edge of header 1
+  Serial.println(F("+--+"));
+  
+  Serial.println();
 }
