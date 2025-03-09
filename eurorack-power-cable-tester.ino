@@ -26,6 +26,10 @@ const int LED_BLUE = 13;  // For missing connections
 bool shortsDetected = false;
 bool connectionsOk = true;
 
+// Store detected issues
+String shortsList = "";
+String disconnectsList = "";
+
 void setup() {
   Serial.begin(9600);
   
@@ -38,38 +42,49 @@ void setup() {
   digitalWrite(LED_RED, HIGH);
   digitalWrite(LED_GREEN, HIGH);
   digitalWrite(LED_BLUE, HIGH);
-  
-  while (!Serial) {
-    ; // Wait for serial port to connect
-  }
-  
-  Serial.println(F("Arduino Micro Pin Connection Tester"));
-  Serial.println(F("--------------------------------------"));
-  Serial.println(F("RGB LED Indicators:"));
-  Serial.println(F("- GREEN: All tests passed"));
-  Serial.println(F("- RED: Shorts detected"));
-  Serial.println(F("- BLUE: Missing connections (no shorts)"));
-  
-  delay(1000);
 }
 
 void loop() {
+  // Run the test
+  runTest();
+  
+  // Display results if serial is available
+  if (Serial) {
+    clearSerialTerminal();
+    // Only print final result and any detected issues
+    if (shortsDetected) {
+      Serial.println(F("TEST RESULT: SHORTS DETECTED\r"));
+      Serial.print(shortsList);
+    } else if (!connectionsOk) {
+      Serial.println(F("TEST RESULT: MISSING CONNECTIONS\r"));
+      Serial.print(disconnectsList);
+    } else {
+      Serial.println(F("TEST RESULT: ALL TESTS PASSED\r"));
+    }
+  }
+}
+
+void clearSerialTerminal() {
+  // Send escape sequence to clear the terminal screen
+  // This works for most serial monitors
+  Serial.write(27);     // ESC character
+  Serial.print(F("[2J\r")); // Clear screen
+  Serial.write(27);     // ESC character
+  Serial.print(F("[H\r"));  // Move cursor to home position
+}
+
+void runTest() {
+  // Clear results
+  shortsList = "";
+  disconnectsList = "";
+  
   // Reset test flags
   shortsDetected = false;
   connectionsOk = true;
   
-  clearSerialTerminal();
-
-  // Turn off all LEDs before testing
-  // digitalWrite(LED_RED, HIGH);
-  // digitalWrite(LED_GREEN, HIGH);
-  // digitalWrite(LED_BLUE, HIGH);
-  
-  Serial.println(F("\n=== Starting Tests ==="));
-  
   // Test for shorts within each header group
-  testGroupForShorts(header1Pins, header1Size, "Header 1");
-  testGroupForShorts(header2Pins, header2Size, "Header 2");
+  testGroupForShorts(header1Pins, header1Size);
+  testGroupForShorts(header2Pins, header2Size);
   
   // Test for shorts between header groups
   testBetweenGroups();
@@ -79,16 +94,9 @@ void loop() {
   
   // Set LED based on test results
   updateLED();
-  
-  //Serial.println(F("Tests complete. Waiting 5 seconds before restarting..."));
-  //delay(5000);
-  delay(100);
 }
 
-void testGroupForShorts(const int pins[], int size, const char* groupName) {
-  Serial.print(F("Testing for shorts within "));
-  Serial.println(groupName);
-  
+void testGroupForShorts(const int pins[], int size) {
   for (int i = 0; i < size; i++) {
     // Set all pins to INPUT (high impedance)
     for (int k = 0; k < size; k++) {
@@ -108,10 +116,11 @@ void testGroupForShorts(const int pins[], int size, const char* groupName) {
         
         // If we read LOW, there's a short to our LOW output pin
         if (digitalRead(pins[j]) == LOW) {
-          Serial.print(F("POTENTIAL SHORT DETECTED between D"));
-          Serial.print(pins[i]);
-          Serial.print(F(" and D"));
-          Serial.println(pins[j]);
+          shortsList += F("SHORT: D");
+          shortsList += pins[i];
+          shortsList += F(" - D");
+          shortsList += pins[j];
+          shortsList += F("\r\n");
           shortsDetected = true;
         }
       }
@@ -122,13 +131,9 @@ void testGroupForShorts(const int pins[], int size, const char* groupName) {
   for (int i = 0; i < size; i++) {
     pinMode(pins[i], INPUT);
   }
-  
-  Serial.println(F("Group test complete"));
 }
 
 void testBetweenGroups() {
-  Serial.println(F("Testing for shorts between header groups"));
-  
   // Set all pins to INPUT
   for (int i = 0; i < header1Size; i++) {
     pinMode(header1Pins[i], INPUT);
@@ -152,10 +157,11 @@ void testBetweenGroups() {
       delay(10);
       
       if (digitalRead(header2Pins[j]) == LOW) {
-        Serial.print(F("POTENTIAL SHORT DETECTED between D"));
-        Serial.print(header1Pins[i]);
-        Serial.print(F(" and D"));
-        Serial.println(header2Pins[j]);
+        shortsList += F("SHORT: D");
+        shortsList += header1Pins[i];
+        shortsList += F(" - D");
+        shortsList += header2Pins[j];
+        shortsList += F("\r\n");
         shortsDetected = true;
       }
       
@@ -164,13 +170,9 @@ void testBetweenGroups() {
     
     pinMode(header1Pins[i], INPUT);
   }
-  
-  Serial.println(F("Cross-group test complete"));
 }
 
 void testContinuity() {
-  Serial.println(F("Testing continuity of connected pins"));
-  
   // Reset all pins to INPUT
   for (int i = 0; i < header1Size; i++) {
     pinMode(header1Pins[i], INPUT);
@@ -181,26 +183,19 @@ void testContinuity() {
   
   // Test continuity between corresponding pins
   for (int i = 0; i < connectedPinCount; i++) {
-    bool forwardPass = false;
-    bool reversePass = false;
-    
     // Test in forward direction
-    Serial.print(F("Testing D"));
-    Serial.print(header1Pins[i]);
-    Serial.print(F(" -> D"));
-    Serial.print(header2Pins[i]);
-    Serial.print(F(": "));
-    
     pinMode(header1Pins[i], OUTPUT);
     digitalWrite(header1Pins[i], LOW);
     pinMode(header2Pins[i], INPUT_PULLUP);
     delay(10);
     
-    if (digitalRead(header2Pins[i]) == LOW) {
-      Serial.println(F("PASS"));
-      forwardPass = true;
-    } else {
-      Serial.println(F("FAIL - No connection"));
+    if (digitalRead(header2Pins[i]) != LOW) {
+      // Record failure
+      disconnectsList += F("OPEN: D");
+      disconnectsList += header1Pins[i];
+      disconnectsList += F(" -> D");
+      disconnectsList += header2Pins[i];
+      disconnectsList += F("\r\n");
       connectionsOk = false;
     }
     
@@ -208,39 +203,24 @@ void testContinuity() {
     pinMode(header2Pins[i], INPUT);
     
     // Test in reverse direction
-    Serial.print(F("Testing D"));
-    Serial.print(header2Pins[i]);
-    Serial.print(F(" -> D"));
-    Serial.print(header1Pins[i]);
-    Serial.print(F(": "));
-    
     pinMode(header2Pins[i], OUTPUT);
     digitalWrite(header2Pins[i], LOW);
     pinMode(header1Pins[i], INPUT_PULLUP);
     delay(10);
     
-    if (digitalRead(header1Pins[i]) == LOW) {
-      Serial.println(F("PASS"));
-      reversePass = true;
-    } else {
-      Serial.println(F("FAIL - No connection"));
+    if (digitalRead(header1Pins[i]) != LOW) {
+      // Record failure
+      disconnectsList += F("OPEN: D");
+      disconnectsList += header2Pins[i];
+      disconnectsList += F(" -> D");
+      disconnectsList += header1Pins[i];
+      disconnectsList += F("\r\n");
       connectionsOk = false;
     }
     
     pinMode(header1Pins[i], INPUT);
     pinMode(header2Pins[i], INPUT);
   }
-  
-  Serial.println(F("Continuity test complete"));
-}
-
-void clearSerialTerminal() {
-  // Send escape sequence to clear the terminal screen
-  // This works for most serial monitors
-  Serial.write(27);     // ESC character
-  Serial.print(F("[2J")); // Clear screen
-  Serial.write(27);     // ESC character
-  Serial.print(F("[H"));  // Move cursor to home position
 }
 
 void updateLED() {
@@ -253,14 +233,11 @@ void updateLED() {
   if (shortsDetected) {
     // Red: Shorts detected (highest priority)
     digitalWrite(LED_RED, LOW);
-    Serial.println(F("TEST RESULT: SHORTS DETECTED"));
   } else if (!connectionsOk) {
     // Blue: Missing connections but no shorts
     digitalWrite(LED_BLUE, LOW);
-    Serial.println(F("TEST RESULT: MISSING CONNECTIONS"));
   } else {
     // Green: All tests passed
     digitalWrite(LED_GREEN, LOW);
-    Serial.println(F("TEST RESULT: ALL TESTS PASSED"));
   }
 }
