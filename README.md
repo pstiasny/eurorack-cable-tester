@@ -2,6 +2,8 @@
 
 This Arduino-based tool helps test Eurorack power cables for shorts and continuity problems.
 
+[video](https://x.com/pst723/status/1898565106822185207)
+
 ## Hardware
 
 The tester uses an Arduino Micro with:
